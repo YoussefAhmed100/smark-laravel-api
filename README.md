@@ -1,58 +1,129 @@
-<p align="center"><a href="https://laravel.com" target="_blank"><img src="https://raw.githubusercontent.com/laravel/art/master/logo-lockup/5%20SVG/2%20CMYK/1%20Full%20Color/laravel-logolockup-cmyk-red.svg" width="400" alt="Laravel Logo"></a></p>
+# Smark Laravel API
 
-<p align="center">
-<a href="https://github.com/laravel/framework/actions"><img src="https://github.com/laravel/framework/workflows/tests/badge.svg" alt="Build Status"></a>
-<a href="https://packagist.org/packages/laravel/framework"><img src="https://img.shields.io/packagist/dt/laravel/framework" alt="Total Downloads"></a>
-<a href="https://packagist.org/packages/laravel/framework"><img src="https://img.shields.io/packagist/v/laravel/framework" alt="Latest Stable Version"></a>
-<a href="https://packagist.org/packages/laravel/framework"><img src="https://img.shields.io/packagist/l/laravel/framework" alt="License"></a>
-</p>
+Multi-tenant SaaS backend built with **Laravel** and **Laravel Sanctum**.
+Each customer signs up, gets their own **tenant** (workspace), and becomes its **Admin**.
 
-## About Laravel
+> Status: in active development. Story 1 (Register) is in progress.
 
-Laravel is a web application framework with expressive, elegant syntax. We believe development must be an enjoyable and creative experience to be truly fulfilling. Laravel takes the pain out of development by easing common tasks used in many web projects, such as:
+## Features
 
-- [Simple, fast routing engine](https://laravel.com/docs/routing).
-- [Powerful dependency injection container](https://laravel.com/docs/container).
-- Multiple back-ends for [session](https://laravel.com/docs/session) and [cache](https://laravel.com/docs/cache) storage.
-- Expressive, intuitive [database ORM](https://laravel.com/docs/eloquent).
-- Database agnostic [schema migrations](https://laravel.com/docs/migrations).
-- [Robust background job processing](https://laravel.com/docs/queues).
-- [Real-time event broadcasting](https://laravel.com/docs/broadcasting).
+- Account registration with email + password
+- Automatic tenant creation with a unique tenant ID
+- Admin role assigned to the first user of each tenant
+- Token-based authentication (Laravel Sanctum)
+- Atomic registration: tenant, user and token are created in a single DB transaction
 
-Laravel is accessible, powerful, and provides tools required for large, robust applications.
+## Tech stack
 
-## Learning Laravel
+| Layer | Technology |
+|---|---|
+| Framework | Laravel (PHP 8.4) |
+| Auth | Laravel Sanctum (personal access tokens) |
+| Runtime | Docker / Docker Compose |
+| Architecture | Controller → FormRequest → DTO → Service |
 
-Laravel has the most extensive and thorough [documentation](https://laravel.com/docs) and video tutorial library of all modern web application frameworks, making it a breeze to get started with the framework.
+## User story: Register an account
 
-In addition, [Laracasts](https://laracasts.com) contains thousands of video tutorials on a range of topics including Laravel, modern PHP, unit testing, and JavaScript. Boost your skills by digging into our comprehensive video library.
+> As a prospective customer, I want to sign up with email and password,
+> so that I have an account on Smark.
 
-You can also watch bite-sized lessons with real-world projects on [Laravel Learn](https://laravel.com/learn), where you will be guided through building a Laravel application from scratch while learning PHP fundamentals.
+**Acceptance criteria**
 
-## Agentic Development
+- [x] User can register with email + password
+- [ ] Email uniqueness with clear validation errors (email taken, weak password)
+- [x] On success a new tenant is created and the user is authenticated (token)
+- [x] User is automatically assigned the Admin role for the new tenant
 
-Laravel's predictable structure and conventions make it ideal for AI coding agents like Claude Code, Cursor, and GitHub Copilot. Install [Laravel Boost](https://laravel.com/docs/ai) to supercharge your AI workflow:
+### Use case diagram
 
-```bash
-composer require laravel/boost --dev
+![Register use case diagram](docs/diagrams/register_use_case_diagram.png)
 
-php artisan boost:install
+The four green use cases always run as part of a successful registration.
+Invalid input (duplicate email, weak password) ends in a `422` response.
+
+### Data flow
+
+![Register data flow](docs/diagrams/register_data_flow.png)
+
+1. The client sends `POST /api/register`.
+2. `RegisterRequest` validates and normalizes the input (`422` on failure).
+3. `AuthController` builds a `RegisterUserDTO` and calls `AuthService::register()`.
+4. Inside one `DB::transaction`: create the tenant, create the Admin user, issue a Sanctum token.
+5. The API responds `201 Created` with `{ user, token }`. Any failure rolls everything back, so no orphan tenants are left behind.
+
+## Project structure
+
+```
+app/
+├── DTOs/Auth/          # Data transfer objects (RegisterUserDTO)
+├── Http/
+│   ├── Controllers/    # Thin controllers
+│   └── Requests/       # Validation (RegisterRequest)
+├── Models/             # User, Tenant
+└── Services/           # Business logic (AuthService)
 ```
 
-Boost provides your agent 15+ tools and skills that help agents build Laravel applications while following best practices.
+## Getting started
 
-## Contributing
+### Prerequisites
 
-Thank you for considering contributing to the Laravel framework! The contribution guide can be found in the [Laravel documentation](https://laravel.com/docs/contributions).
+- Docker and Docker Compose
+- Git
 
-## Code of Conduct
+### Setup
 
-In order to ensure that the Laravel community is welcoming to all, please review and abide by the [Code of Conduct](https://laravel.com/docs/contributions#code-of-conduct).
+```bash
+git clone https://github.com/<username>/smark-laravel-api.git
+cd smark-laravel-api
 
-## Security Vulnerabilities
+cp .env.example .env
+docker compose up -d --build
 
-If you discover a security vulnerability within Laravel, please send an e-mail to Taylor Otwell via [taylor@laravel.com](mailto:taylor@laravel.com). All security vulnerabilities will be promptly addressed.
+docker compose exec app composer install
+docker compose exec app php artisan key:generate
+docker compose exec app php artisan migrate
+```
+
+### Quick check with tinker
+
+```bash
+docker compose exec app php artisan tinker
+```
+
+```php
+$user = App\Models\User::first();
+$user->createToken('test')->plainTextToken; // "1|AbCd..."
+```
+
+Only the hash of the token is stored in `personal_access_tokens`.
+
+## API
+
+| Method | Endpoint | Description | Auth |
+|---|---|---|---|
+| POST | `/api/register` | Create a tenant + Admin user, return token | No |
+
+Authenticated requests send the token as a header:
+
+```
+Authorization: Bearer <id>|<token>
+```
+
+## Roadmap
+
+- [ ] Email uniqueness (global vs per-tenant decision) + DB constraint
+- [ ] Password strength rules
+- [ ] Login endpoint
+- [ ] Token expiration
+- [ ] Rate limiting on auth endpoints
+- [ ] Feature tests for the register flow
+
+## Conventions
+
+- Conventional Commits (`feat:`, `fix:`, `refactor:`, ...)
+- `.env` is never committed; use `.env.example`
+- DTO namespace is `App\DTOs` (PSR-4 is case-sensitive on Linux)
 
 ## License
 
-The Laravel framework is open-sourced software licensed under the [MIT license](https://opensource.org/licenses/MIT).
+Internal assignment project.
